@@ -1,0 +1,22 @@
+# Core dependencies (Python 3.14, .venv)
+numpy>=1.23,<3.0
+pandas>=1.5,<4.0
+scikit-learn>=1.4,<2.0
+joblib>=1.2
+lightgbm>=4.0
+optuna>=3.0
+
+# --- EDA / notebook (optional) ---
+matplotlib>=3.6
+seaborn>=0.12
+jupyter>=1.0
+
+# AutoGluon dependencies (Python 3.12, .venv_ag)
+# AutoGluon requires Python <=3.12 due to numpy.distutils removal in 3.13+.
+# Use a separate venv:
+#   py -3.12 -m venv .venv_ag
+#   .venv_ag\Scripts\pip install "autogluon.tabular[all]"
+#   .venv_ag\Scripts\pip install pandas numpy scikit-learn joblib lightgbm
+# Then run:
+#   .venv_ag\Scripts\python train_autogluon.py
+#   .venv_ag\Scripts\python inference_autogluon.py

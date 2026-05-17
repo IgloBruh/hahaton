@@ -1,0 +1,29 @@
+# --- Hackathon rules forbid uploading raw data to the public repo ---
+dataset/
+*.csv
+.claude/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.venv/
+.venv_ag/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Models & artefacts ---
+# Keep the trained model checked-in OR rebuild via train.py — leave decision to user
+# models/*.pkl
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
