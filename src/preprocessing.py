@@ -273,6 +273,25 @@ def _add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+TARGET_LAG_OFFSETS = [1, 2, 3, 6, 12, 24]
+
+
+def _add_target_lags(df: pd.DataFrame) -> pd.DataFrame:
+    """Lag features of the target variable (past production).
+
+    Only added when TARGET_COL is present in df (training mode).
+    During inference these columns are filled externally by the autoregressive
+    prediction loop using previously predicted values.
+    """
+    if TARGET_COL not in df.columns:
+        return df
+    new_cols = {}
+    s = df[TARGET_COL]
+    for lag in TARGET_LAG_OFFSETS:
+        new_cols[f"target_lag{lag}"] = s.shift(lag)
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+
 # ----- Public API -------------------------------------------------------
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     """Build the full feature set on a chronologically-sorted DataFrame."""
@@ -285,6 +304,7 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_extra_features(df)
     df = _add_power_curve_features(df)
     df = _add_temporal_features(df)
+    df = _add_target_lags(df)
 
     # Fill NaNs created by shift/rolling at the boundaries
     df = df.ffill().bfill()

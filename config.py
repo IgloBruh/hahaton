@@ -16,6 +16,9 @@ MODEL_PATH = MODELS_DIR / "model.pkl"
 PREDICTIONS_PATH = ROOT_DIR / "predictions.csv"
 AG_MODEL_PATH = MODELS_DIR / "autogluon_predictor"
 AG_PREDICTIONS_PATH = ROOT_DIR / "predictions_autogluon.csv"
+LSTM_MODEL_PATH = MODELS_DIR / "lstm_model.pt"
+LSTM_SCALER_PATH = MODELS_DIR / "lstm_scaler.pkl"
+LSTM_PREDICTIONS_PATH = ROOT_DIR / "predictions_lstm.csv"
 
 # --------- Target & schema ---------
 TARGET_COL = "Выработка. Результирующий расчет"

@@ -76,7 +76,7 @@ def main(n_trials: int = 50) -> None:
     set_global_seed(SEED)
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    print("→ Loading and preparing data...")
+    print("-> Loading and preparing data...")
     df = load_train(TRAIN_CSV)
     df = build_features(df)
     feats = feature_columns(df)
@@ -91,7 +91,7 @@ def main(n_trials: int = 50) -> None:
     X_val = val_df[feats].values.astype(np.float32)
     y_val = val_df[TARGET_COL].values
 
-    print(f"→ Starting Optuna study ({n_trials} trials)...")
+    print(f"-> Starting Optuna study ({n_trials} trials)...")
     study = optuna.create_study(
         direction="minimize",
         sampler=optuna.samplers.TPESampler(seed=SEED),
@@ -118,7 +118,7 @@ def main(n_trials: int = 50) -> None:
     }
     out_path = ROOT / "tune_results.json"
     out_path.write_text(json.dumps(result, indent=2))
-    print(f"\n✓ Saved → {out_path}")
+    print(f"\n✓ Saved -> {out_path}")
 
     # Print a ready-to-paste ENSEMBLE_CONFIGS snippet
     p = best.params

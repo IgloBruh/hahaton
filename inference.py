@@ -9,8 +9,9 @@ January 2026. We therefore concatenate the **training tail** to the head of
 the validation slice before building features, then drop the training rows
 again before predicting.
 
-The training set ends at 2025-12-31 23:00 and the valid set starts at
-2026-01-01 00:00 — they are chronologically contiguous, so this is exact.
+Target lag features (target_lag1 .. target_lag24) are filled autoregressively:
+  - Initial values come from the real training-tail targets.
+  - Each subsequent step uses the model's own prediction as the lag value.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
+import numpy as np
 import pandas as pd
 
 from config import (
@@ -29,63 +31,90 @@ from config import (
 )
 from src.utils import set_global_seed
 from src.data_loader import load_train, load_valid
-from src.preprocessing import build_features, clip_predictions
+from src.preprocessing import build_features, clip_predictions, TARGET_LAG_OFFSETS
 from src.model import WindPowerModel
 
 
-# How many hours of training tail to prepend. >24 is enough for the largest lag.
 HISTORY_HOURS = 48
 
 
 def main() -> None:
     set_global_seed(SEED)
 
-    print(f"→ Loading model from {MODEL_PATH} ...")
+    print(f"-> Loading model from {MODEL_PATH} ...")
     model = WindPowerModel.load(MODEL_PATH)
     print(f"   ensemble members = {model.n_members}")
 
-    print(f"→ Loading test features from {VALID_CSV} ...")
-    raw_valid = load_valid(VALID_CSV)            # sorted ascending by datetime
+    print(f"-> Loading test features from {VALID_CSV} ...")
+    raw_valid = load_valid(VALID_CSV)
     n_rows = len(raw_valid)
     print(f"   rows = {n_rows}")
 
-    print(f"→ Loading training tail for lag/rolling context ...")
+    print(f"-> Loading training tail for lag/rolling context ...")
     train = load_train(TRAIN_CSV)
-    train_tail = train.tail(HISTORY_HOURS).copy()
-    # Drop target so the schemas align (valid has no target column)
+    # Extended tail: enough history for both weather lags and target lags
+    max_lag = max(TARGET_LAG_OFFSETS) if TARGET_LAG_OFFSETS else 0
+    history_len = max(HISTORY_HOURS, max_lag)
+    train_tail = train.tail(history_len).copy()
+    # Keep a copy of tail targets for the autoregressive loop
+    tail_targets = list(train_tail[TARGET_COL].values)
     train_tail = train_tail.drop(columns=[TARGET_COL], errors="ignore")
 
-    # Concatenate: history first, then valid features (chronological order)
     combined = pd.concat([train_tail, raw_valid], ignore_index=True)
     combined = combined.sort_values(DATETIME_COL).reset_index(drop=True)
 
-    print("→ Building features (with full history context) ...")
+    print("-> Building features (with full history context) ...")
     feat_df = build_features(combined)
 
-    # Keep only the rows belonging to the validation period
     valid_mask = feat_df[DATETIME_COL].isin(raw_valid[DATETIME_COL])
-    feat_valid = feat_df.loc[valid_mask].copy()
-    assert len(feat_valid) == n_rows, (
-        f"Expected {n_rows} valid rows after feature build, got {len(feat_valid)}"
-    )
+    feat_valid = feat_df.loc[valid_mask].copy().reset_index(drop=True)
     feat_valid = feat_valid.sort_values(DATETIME_COL).reset_index(drop=True)
+    assert len(feat_valid) == n_rows
 
-    print("→ Predicting (ensemble mean) ...")
-    preds_sorted = clip_predictions(model.predict(feat_valid), INSTALLED_CAPACITY_MW)
+    # Determine which target lag columns are actually used by the model
+    target_lag_cols = [f"target_lag{lag}" for lag in TARGET_LAG_OFFSETS
+                       if f"target_lag{lag}" in model.feature_names]
+
+    if target_lag_cols:
+        print(f"-> Autoregressive prediction ({len(target_lag_cols)} target lag cols) ...")
+        # Initialise all target lag columns to 0
+        for col in target_lag_cols:
+            feat_valid[col] = 0.0
+
+        target_history = list(tail_targets)  # grows as we predict
+        all_preds = []
+
+        for i in range(n_rows):
+            # Fill target lags from history (real or predicted)
+            for lag in TARGET_LAG_OFFSETS:
+                col = f"target_lag{lag}"
+                if col not in target_lag_cols:
+                    continue
+                idx = len(target_history) - lag
+                feat_valid.at[i, col] = target_history[idx] if idx >= 0 else 0.0
+
+            pred = float(clip_predictions(
+                model.predict(feat_valid.iloc[[i]]), INSTALLED_CAPACITY_MW
+            )[0])
+            all_preds.append(pred)
+            target_history.append(pred)
+
+        preds_sorted = np.array(all_preds)
+    else:
+        print("-> Predicting (no target lags in model, single pass) ...")
+        preds_sorted = clip_predictions(model.predict(feat_valid), INSTALLED_CAPACITY_MW)
+
     pred_by_dt = dict(zip(feat_valid[DATETIME_COL].values, preds_sorted))
 
-    # The submission needs predictions in the SAME ORDER as the original
-    # valid_features.csv file. We therefore reload it without sorting,
-    # then map predictions back by datetime.
     original = pd.read_csv(VALID_CSV)
     original[DATETIME_COL] = pd.to_datetime(original[DATETIME_COL])
     out = original[DATETIME_COL].map(pred_by_dt).values
 
-    assert len(out) == n_rows, "Row-count mismatch — submission would be invalid."
-    assert not pd.isna(out).any(), "NaN found in predictions — feature build skipped a row."
+    assert len(out) == n_rows, "Row-count mismatch."
+    assert not pd.isna(out).any(), "NaN in predictions."
 
     pd.Series(out).to_csv(PREDICTIONS_PATH, index=False, header=False)
-    print(f"✓ Wrote {len(out)} predictions → {PREDICTIONS_PATH}")
+    print(f"OK Wrote {len(out)} predictions -> {PREDICTIONS_PATH}")
     print(f"   stats: min={out.min():.3f}  mean={out.mean():.3f}  max={out.max():.3f}")
 
 

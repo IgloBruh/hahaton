@@ -22,7 +22,6 @@ Usage
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import warnings
 from pathlib import Path
@@ -57,16 +56,10 @@ def main(time_limit: int = 3600, preset: str = "high_quality") -> None:
     feats = feature_columns(df)
     print(f"  {len(feats)} features.")
 
-    # Filter features using permutation importance scores from train.py
-    pi_path = ROOT / "pi_scores.json"
-    if pi_path.exists():
-        pi_scores = json.loads(pi_path.read_text())
-        feats_filtered = [f for f in feats if pi_scores.get(f, 1.0) >= 0.001]
-        print(f"  PI-filter: {len(feats)} -> {len(feats_filtered)} features "
-              f"(removed {len(feats) - len(feats_filtered)}).")
-        feats = feats_filtered
-    else:
-        print("  pi_scores.json not found — using all features. Run train.py first to enable PI-filtering.")
+    # NOTE: PI-filtering based on LightGBM importance is intentionally disabled for AutoGluon.
+    # Features unimportant for trees can be valuable for neural networks (NeuralNetTorch,
+    # NeuralNetFastAI), which receive significant weight in the AutoGluon ensemble.
+    # AutoGluon handles feature selection internally per model type.
 
     split_idx = int(len(df) * (1 - VAL_FRACTION))
     train_df = df.iloc[:split_idx].reset_index(drop=True)
@@ -127,7 +120,7 @@ def main(time_limit: int = 3600, preset: str = "high_quality") -> None:
     m = regression_metrics(y_val, preds_clip)
     pretty_print_metrics("AutoGluon best ensemble (val)", m)
 
-    print(f"\nModel saved → {AG_MODEL_PATH}")
+    print(f"\nModel saved -> {AG_MODEL_PATH}")
     print("Run  python inference_autogluon.py  to generate predictions_autogluon.csv")
 
 
