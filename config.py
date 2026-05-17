@@ -6,7 +6,7 @@ SEED = 42
 
 # --------- Paths ---------
 ROOT_DIR = Path(__file__).resolve().parent
-DATA_DIR = ROOT_DIR / "dataset"
+DATA_DIR = ROOT_DIR / "data"
 TRAIN_CSV = DATA_DIR / "train_dataset.csv"
 VALID_CSV = DATA_DIR / "valid_features.csv"
 

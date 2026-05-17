@@ -22,6 +22,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -56,11 +57,34 @@ def main(time_limit: int = 3600, preset: str = "high_quality") -> None:
     feats = feature_columns(df)
     print(f"  {len(feats)} features.")
 
+    # Filter features using permutation importance scores from train.py
+    pi_path = ROOT / "pi_scores.json"
+    if pi_path.exists():
+        pi_scores = json.loads(pi_path.read_text())
+        feats_filtered = [f for f in feats if pi_scores.get(f, 1.0) >= 0.001]
+        print(f"  PI-filter: {len(feats)} -> {len(feats_filtered)} features "
+              f"(removed {len(feats) - len(feats_filtered)}).")
+        feats = feats_filtered
+    else:
+        print("  pi_scores.json not found — using all features. Run train.py first to enable PI-filtering.")
+
     split_idx = int(len(df) * (1 - VAL_FRACTION))
     train_df = df.iloc[:split_idx].reset_index(drop=True)
     val_df   = df.iloc[split_idx:].reset_index(drop=True)
     print(f"  train={len(train_df)}  val={len(val_df)}"
           f"  (val [{val_df[DATETIME_COL].min()}, {val_df[DATETIME_COL].max()}])")
+
+    # Remove anomalous training rows: wind in operational range but near-zero output
+    # (unrecorded forced shutdowns — noisy labels that hurt all models)
+    before = len(train_df)
+    operational_mask = ~(
+        (train_df["wind_speed_hub"] > 5.0) &
+        (train_df[TARGET_COL] < 1.0) &
+        (train_df["available_fraction"] > 0.9)
+    )
+    train_df = train_df[operational_mask].reset_index(drop=True)
+    print(f"  Anomaly filter: removed {before - len(train_df)} rows "
+          f"({before - len(train_df)} / {before}).")
 
     y_val = val_df[TARGET_COL].values
 

@@ -13,7 +13,7 @@
 ├── train_autogluon.py         # обучение AutoGluon → models/autogluon_predictor/
 ├── inference_autogluon.py     # инференс AutoGluon → predictions_autogluon.csv
 ├── requirements.txt
-├── dataset/
+├── data/
 │   ├── train_dataset.csv      # обучающая выборка (с целевым столбцом)
 │   └── valid_features.csv     # тестовая выборка (без цели, для сабмита)
 ├── models/
@@ -28,7 +28,8 @@
 
 ## Установка
 
-В проекте два окружения: основное (Python 3.14) и отдельное для AutoGluon (Python 3.12), потому что AutoGluon не поддерживает Python 3.13+.
+В проекте два окружения: основное (Python 3.14) и отдельное для AutoGluon (Python 3.11),
+потому что AutoGluon не поддерживает Python 3.12+.
 
 ### Основное окружение — LightGBM-пайплайн
 
@@ -40,9 +41,8 @@ py -3.14 -m venv .venv
 ### AutoGluon-окружение
 
 ```bash
-py -3.12 -m venv .venv_ag
-.venv_ag\Scripts\pip install "autogluon.tabular[all]"
-.venv_ag\Scripts\pip install lightgbm pandas numpy scikit-learn joblib
+py -3.11 -m venv .venv_ag
+.venv_ag\Scripts\pip install "autogluon.tabular[all]" lightgbm pandas numpy scikit-learn joblib
 ```
 
 ## Запуск
@@ -54,6 +54,7 @@ py -3.12 -m venv .venv_ag
 .venv\Scripts\python tune.py
 
 # Шаг 2: обучить ансамбль из 7 членов (~5–10 мин)
+# Также генерирует pi_scores.json — нужен для PI-фильтрации в AutoGluon
 .venv\Scripts\python train.py
 
 # Шаг 3: сгенерировать predictions.csv
@@ -64,6 +65,9 @@ py -3.12 -m venv .venv_ag
 > (уже оптимизированные: MAE ≈ 7,05 на валидации).
 
 ### Пайплайн 2 — AutoGluon
+
+> Перед запуском рекомендуется выполнить `train.py` — он создаёт `pi_scores.json`,
+> который AutoGluon использует для отсечения шумовых признаков.
 
 ```bash
 # Обучение (по умолчанию 1 час, preset high_quality)
@@ -150,7 +154,7 @@ copy predictions_autogluon.csv predictions.csv
 |---|---|---|
 | Базовое (HistGBM, 54 признака) | 7,63 | 8,47 % |
 | LightGBM, 1 модель | ~7,15 | ~7,94 % |
-| **LightGBM-ансамбль × 7 (текущий)** | **~7,05** | **~7,83 %** |
+| **LightGBM-ансамбль × 7 (текущий)** | **7,046** | **7,82 %** |
 | AutoGluon WeightedEnsemble | *в процессе* | — |
 
 ## Воспроизводимость
