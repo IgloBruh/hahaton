@@ -153,9 +153,9 @@ def main(ag_val_mae: float = 7.036, w_v9_manual: float | None = None) -> None:
     out_df["predict"] = blended
     out_df.to_csv(OUT_PATH, index=False)
 
-    # Clean submission file: one column, no header
+    # Submission file: "predict" header + values
     submit_path = ROOT / "predictions.csv"
-    pd.Series(blended).to_csv(submit_path, index=False, header=False)
+    pd.DataFrame({"predict": blended}).to_csv(submit_path, index=False)
 
     print(f"\nSaved blend -> {OUT_PATH}")
     print(f"  rows={len(blended)}  min={blended.min():.3f}  mean={blended.mean():.3f}  max={blended.max():.3f}")

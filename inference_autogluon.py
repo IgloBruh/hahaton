@@ -102,7 +102,7 @@ def main() -> None:
     assert len(out) == n_rows, "Row-count mismatch."
     assert not pd.isna(out).any(), "NaN in predictions."
 
-    pd.Series(out).to_csv(AG_PREDICTIONS_PATH, index=False, header=False)
+    pd.DataFrame({"predict": out}).to_csv(AG_PREDICTIONS_PATH, index=False)
     print(f"OK Wrote {len(out)} predictions -> {AG_PREDICTIONS_PATH}")
     print(f"   stats: min={out.min():.3f}  mean={out.mean():.3f}  max={out.max():.3f}")
     print("To submit: copy predictions_autogluon.csv -> predictions.csv")

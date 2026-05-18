@@ -25,8 +25,8 @@ if __name__ == "__main__":
         sys.exit(1)
     out_path = run_predict(version=9, model_path=MODEL_V9, out_path=OUT_V9, autoregressive=False)
 
-    # Save clean submission file: one column, no header, dot separator
+    # Save submission file: "predict" header + values
     df = pd.read_csv(out_path)
-    df["predict"].to_csv(SUBMIT_V9, index=False, header=False)
+    pd.DataFrame({"predict": df["predict"]}).to_csv(SUBMIT_V9, index=False)
     print(f"Submission file saved -> {SUBMIT_V9}")
     print(f"Done. Upload predictions.csv to the platform.")
