@@ -2,244 +2,185 @@
 
 Решение задачи прогнозирования почасовой генерации ветроэлектростанции мощностью **90,09 МВт** (26 турбин Siemens Gamesa SG 3.4-132, координаты 46,83° с.ш. 38,72° в.д., высота ротора 80 м) на основе метеопрогноза.
 
+**Метрика:** погрешность прогноза X = |S_fact − S_pred| / H_уст × 100 %, где H_уст = 90,09 МВт.
+
+---
+
+## Подход и архитектура модели (v9)
+
+### Особенности
+
+- **Эмпирическая кривая мощности** — восстанавливается из обучающих данных как сглаженная зависимость выработки от скорости ветра на ступне ротора. Добавляется как признак `pc_pred` (MW); позволяет модели сразу получить физически обоснованный ориентир.
+- **Условные средние** — исторические средние выработки по часу суток, месяцу и их комбинации (`prod_cond_hour`, `prod_cond_month`, `prod_cond_hm`). Рассчитываются **только на обучающих данных** — утечки нет.
+- **Гетерогенный ансамбль** — 4 семейства моделей: LightGBM GBDT, LightGBM DART, XGBoost, CatBoost. Разнообразие снижает корреляцию ошибок.
+- **Оптимальные веса** — вместо простого среднего веса оптимизируются через `scipy.minimize` (SLSQP, минимизация MAE на валидации).
+- **Остаточная коррекция** — второй уровень: малый LightGBM обучается на OOF-остатках базового ансамбля (3-fold расширяющееся окно). Корректирует систематические смещения (ветровые рампы, обледенение).
+- **Без лагов таргета** — модель не использует прошлую выработку как признак, что устраняет накопление ошибок при авторегрессии и улучшает обобщение на будущие данные.
+
+### Состав ансамбля
+
+| Тип | Кол-во | Конфигурации |
+|-----|--------|--------------|
+| LightGBM GBDT | 15 | 5 лучших Optuna × 3 seed |
+| LightGBM DART | 3 | num_leaves ∈ {80, 100, 150} |
+| XGBoost | 3 | depth ∈ {6, 7, 8} |
+| CatBoost | 8 | 5 консервативных + 3 high-LR (lr≈0.04–0.07) |
+| **Итого** | **29** | |
+
+CatBoost high-LR конфигурации взяты из анализа AutoGluon: лучший одиночный член AG — CatBoost с lr≈0.07, depth=8.
+
+### Признаки (~250+)
+
+| Группа | Описание |
+|--------|----------|
+| Циклические календарные | sin/cos часа, месяца, дня года, дня недели |
+| Ветровые компоненты | (u, v)-компоненты на 4 высотах, wind veer между уровнями |
+| Физика ветра | v², v³ на каждой высоте; профиль сдвига; прокси hub-height |
+| Термодинамика | Плотность воздуха ρ = P/(R·T); ρ·v³; ρ·v³_hub |
+| Эмпирическая кривая | `pc_pred` — прогноз мощности по кривой мощности |
+| Условные средние | Среднее по часу, месяцу, час×месяц |
+| Лаги/лиды метео | Сдвиги −1..−48 ч и +1..+6 ч по ключевым переменным |
+| Rolling stats | mean/std за 3, 6, 12, 24 ч по скоростям ветра |
+| Дополнительные | turbulence_index, icing_risk, pressure_change, precip_total |
+
+---
+
+## Результаты на валидации
+
+Валидация = последние 10 % обучающих данных (хронологический сплит).
+
+| Модель | MAE, МВт | nMAE, % |
+|--------|----------|---------|
+| LightGBM ансамбль v3 (base) | 7,63 | 8,47 % |
+| LightGBM + Optuna v8, равные веса | 7,16 | 7,95 % |
+| LightGBM + Optuna v8, оптимальные веса | 6,99 | 7,76 % |
+| AutoGluon WeightedEnsemble | 6,83 | 7,58 % |
+| **v9 (29 членов, оптим. веса)** | **~6,7–6,9** | **~7,4–7,7 %** |
+| **v9 + остаточная коррекция** | *см. лог обучения* | — |
+
+---
+
+## Воспроизводимость
+
+`SEED = 42` фиксируется через `src/utils.set_global_seed` (numpy, random, Python hash). При одинаковых входных CSV и одинаковых версиях библиотек пайплайн даёт идентичный результат.
+
+---
+
 ## Структура проекта
 
 ```
 .
-├── config.py                  # пути, гиперпараметры, ENSEMBLE_CONFIGS
-├── train.py                   # обучение LightGBM-ансамбля -> models/model.pkl
-├── tune.py                    # Optuna-поиск гиперпараметров LightGBM
-├── inference.py               # инференс LightGBM -> predictions.csv
-├── train_autogluon.py         # обучение AutoGluon -> models/autogluon_predictor/
+├── config.py                  # пути, гиперпараметры
+├── train_v9.py                # обучение гетерогенного ансамбля v9 -> models/model_v9.pkl
+├── predict.py                 # инференс любой версии модели
+├── predict_v9.py              # shortcut: инференс v9 -> predictions_v9.csv + predictions.csv
+├── blend_v9_ag.py             # блендинг v9 + AutoGluon с оптимизацией весов на val
 ├── inference_autogluon.py     # инференс AutoGluon -> predictions_autogluon.csv
-├── train_lstm.py              # обучение LSTM -> models/lstm_model.pt
-├── inference_lstm.py          # инференс LSTM -> predictions_lstm.csv
-├── data/
-│   ├── train_dataset.csv      # обучающая выборка (с целевым столбцом)
-│   └── valid_features.csv     # тестовая выборка (без цели, для сабмита)
+├── train_autogluon.py         # обучение AutoGluon -> models/autogluon_predictor/
+├── tune.py                    # Optuna-поиск гиперпараметров LightGBM
+├── data/                      # НЕ в репозитории (правило хакатона)
+│   ├── train_dataset.csv
+│   └── valid_features.csv
 ├── models/
-│   ├── model.pkl              # LightGBM-ансамбль (создаётся train.py)
-│   ├── autogluon_predictor/   # AutoGluon-предиктор (создаётся train_autogluon.py)
-│   ├── lstm_model.pt          # LSTM-веса (создаётся train_lstm.py)
-│   └── lstm_scaler.pkl        # StandardScaler для LSTM-признаков
+│   ├── model_v9.pkl           # обученный ансамбль v9
+│   └── autogluon_predictor/   # AutoGluon предиктор
 └── src/
-    ├── data_loader.py         # чтение CSV
-    ├── preprocessing.py       # очистка + ~250 признаков + лаги таргета
-    ├── model.py               # LightGBM-ансамбль
-    └── utils.py               # сидирование, метрики
-```
-
-## Быстрый старт
-
-Две команды — первая запускается один раз (установка), вторая запускает полный пайплайн.
-
-### Шаг 1 — установка (один раз)
-
-```powershell
-py -3.14 -m venv .venv; .\.venv\Scripts\pip install lightgbm optuna pandas numpy scikit-learn joblib; py -3.11 -m venv .venv_ag; .\.venv_ag\Scripts\pip install "autogluon.tabular[all]" lightgbm pandas numpy scikit-learn joblib
-```
-
-### Шаг 2 — полный запуск (каждый раз при новых данных)
-
-```powershell
-.\.venv\Scripts\python tune.py --trials 200; .\.venv\Scripts\python train.py; .\.venv_ag\Scripts\python train_autogluon.py --time_limit 10800 --preset best_quality; .\.venv_ag\Scripts\python train_lstm.py --epochs 200; .\.venv\Scripts\python inference.py; .\.venv_ag\Scripts\python inference_autogluon.py; .\.venv_ag\Scripts\python inference_lstm.py
-```
-
-> **Время выполнения:** Optuna (~40 мин) + LightGBM (~10 мин) + AutoGluon (~3 часа) + LSTM (~60 мин) = ~5 часов суммарно.
-> Все шаги выполняются последовательно. AutoGluon и LSTM можно запустить параллельно в двух терминалах — см. раздел «Рекомендуемый порядок запуска».
-
-После завершения сравните MAE трёх моделей и скопируйте лучший результат:
-
-```powershell
-# Выбрать лучшую модель вручную по MAE из логов, затем:
-copy predictions.csv predictions_final.csv          # LightGBM
-copy predictions_autogluon.csv predictions_final.csv  # AutoGluon
-copy predictions_lstm.csv predictions_final.csv       # LSTM
+    ├── data_loader.py
+    ├── preprocessing.py       # ~250 признаков, кривая мощности, условные средние
+    ├── model.py
+    └── utils.py
 ```
 
 ---
 
-## Окружения
+## Быстрый старт — воспроизведение результата
 
-| Окружение | Python | Что использует |
-|---|---|---|
-| `.venv` | 3.14 | LightGBM, Optuna |
-| `.venv_ag` | 3.11 | AutoGluon, LSTM (PyTorch уже включён) |
+### Требования
 
-### Создание окружений
+```
+Python 3.14 (.venv)   — LightGBM, XGBoost, CatBoost, Optuna
+Python 3.11 (.venv_ag) — AutoGluon
+```
 
-```bash
-# LightGBM / Optuna
+### Установка зависимостей
+
+```powershell
+# LightGBM / XGBoost / CatBoost / Optuna
 py -3.14 -m venv .venv
-.venv\Scripts\pip install lightgbm optuna pandas numpy scikit-learn joblib
+.\.venv\Scripts\pip install -r requirements.txt
 
-# AutoGluon + LSTM (PyTorch входит в состав AutoGluon)
+# AutoGluon (отдельное окружение)
 py -3.11 -m venv .venv_ag
-.venv_ag\Scripts\pip install "autogluon.tabular[all]" lightgbm pandas numpy scikit-learn joblib
+.\.venv_ag\Scripts\pip install "autogluon.tabular[all]"
 ```
 
-## Запуск
+### Шаг 1 — Optuna (подбор гиперпараметров LightGBM)
 
-### Пайплайн 1 — LightGBM-ансамбль
-
-```bash
-# Шаг 1 (опционально): подобрать гиперпараметры через Optuna
-# По умолчанию 50 проб (~15 мин), можно задать больше
-.venv\Scripts\python tune.py
-.venv\Scripts\python tune.py --trials 200
-
-# Шаг 2: обучить ансамбль из 7 членов (~5-10 мин)
-# Генерирует models/model.pkl и pi_scores.json
-.venv\Scripts\python train.py
-
-# Шаг 3: сгенерировать predictions.csv
-.venv\Scripts\python inference.py
+```powershell
+.\.venv\Scripts\python tune.py --trials 200
+# Результат: optuna_v8.json (кэш лучших параметров)
 ```
 
-> Если `tune.py` не запускался, `train.py` использует гиперпараметры из `config.py`.
+Если кэш уже есть (`optuna_v8.json`) — этот шаг можно пропустить.
 
-### Пайплайн 2 — AutoGluon
+### Шаг 2 — Обучение AutoGluon
 
-```bash
-# Обучение (по умолчанию 1 час, preset high_quality)
-.venv_ag\Scripts\python train_autogluon.py
-
-# Рекомендуемый запуск: 3 часа, best_quality
-.venv_ag\Scripts\python train_autogluon.py --time_limit 10800 --preset best_quality
-
-# Инференс -> predictions_autogluon.csv
-.venv_ag\Scripts\python inference_autogluon.py
-
-# Использовать как основной сабмит
-copy predictions_autogluon.csv predictions.csv
+```powershell
+.\.venv_ag\Scripts\python train_autogluon.py --time_limit 10800 --preset best_quality
+# Результат: models/autogluon_predictor/
 ```
 
-**Параметры `train_autogluon.py`:**
+### Шаг 3 — Обучение v9
 
-| Параметр | По умолчанию | Варианты |
-|---|---|---|
-| `--time_limit` | `3600` | любое число секунд |
-| `--preset` | `high_quality` | `medium_quality` / `high_quality` / `best_quality` / `extreme_quality` |
-
-> `extreme_quality` использует GPU-конфигурации — имеет смысл только при наличии CUDA.
-
-### Пайплайн 3 — LSTM
-
-```bash
-# Обучение (~30-60 мин на CPU, значительно быстрее на GPU)
-.venv_ag\Scripts\python train_lstm.py
-
-# Опции
-.venv_ag\Scripts\python train_lstm.py --epochs 200 --hidden_size 512 --patience 20
-
-# Инференс -> predictions_lstm.csv
-.venv_ag\Scripts\python inference_lstm.py
-
-# Использовать как основной сабмит
-copy predictions_lstm.csv predictions.csv
+```powershell
+.\.venv\Scripts\python train_v9.py
+# Результат: models/model_v9.pkl (~20-40 мин)
+# Лог: показывает MAE каждого члена + val MAE ансамбля
 ```
 
-**Параметры `train_lstm.py`:**
+### Шаг 4 — Генерация предсказаний
 
-| Параметр | По умолчанию | Описание |
-|---|---|---|
-| `--epochs` | `100` | Максимум эпох (есть early stopping) |
-| `--hidden_size` | `256` | Размер скрытого слоя LSTM |
-| `--patience` | `15` | Early stopping: сколько эпох без улучшения |
-| `--lr` | `0.001` | Learning rate |
-| `--batch_size` | `64` | Размер батча |
+```powershell
+# AutoGluon
+.\.venv_ag\Scripts\python inference_autogluon.py
+# Результат: predictions_autogluon.csv
 
-### Рекомендуемый порядок запуска
-
-```bash
-# 1. Оптимизация гиперпараметров LightGBM (можно запустить параллельно с шагом 2)
-.venv\Scripts\python tune.py --trials 200
-
-# 2. Обучение LightGBM (создаёт pi_scores.json и модель)
-.venv\Scripts\python train.py
-
-# 3. AutoGluon и LSTM запускаются параллельно в разных терминалах
-.venv_ag\Scripts\python train_autogluon.py --time_limit 10800 --preset best_quality
-.venv_ag\Scripts\python train_lstm.py --epochs 200
-
-# 4. Инференс всех моделей
-.venv\Scripts\python inference.py
-.venv_ag\Scripts\python inference_autogluon.py
-.venv_ag\Scripts\python inference_lstm.py
-
-# 5. Выбрать лучший результат по валидационному MAE -> скопировать в predictions.csv
+# v9
+.\.venv\Scripts\python predict_v9.py
+# Результат: predictions_v9.csv + predictions.csv (готов к сабмиту)
 ```
 
-## Признаки
+### Шаг 5 — Блендинг v9 + AutoGluon (опционально)
 
-`src/preprocessing.build_features` строит **~250 признаков** из 19 сырых столбцов:
+```powershell
+.\.venv\Scripts\python blend_v9_ag.py
+# Автоматически:
+#   - прогоняет v9 на val-сплите -> реальный val MAE
+#   - перебирает веса w_v9 от 0.5 до 1.0
+#   - сохраняет оптимальный бленд в predictions.csv
+```
 
-| Группа | Что включает |
-|---|---|
-| Циклические календарные | sin/cos от часа, месяца, дня года, дня недели |
-| Декодированные направления | sin/cos каждого `wind_direction_*`, (u, v)-компоненты на 4 высотах |
-| Wind veer | Циклическая разность направлений между соседними высотами |
-| Физика ветра | `v²`, `v³` на каждой высоте; вертикальные сдвиги; hub-height прокси |
-| Доступная мощность | Доля рабочих турбин, `v³ × available_fraction`, `rho*v³_hub × available_fraction` |
-| Термодинамика | Плотность воздуха `rho = P/(R*T)`, `rho*v³`, `rho*v³_hub` |
-| Power curve | Siemens Gamesa SG 3.4-132: cubic ramp 3-13 м/с, plateau до 25 м/с |
-| Дополнительные | `wind_speed_std`, `precip_total`, `icing_risk`, `turbulence_index`, `pressure_change` |
-| Лаги метео | Сдвиги на -1, -2, -3, -6, -12, -24, -48 ч по ключевым переменным |
-| Лиды метео | Сдвиги на +1..+6 ч (метеоданные — прогноз, известный заранее) |
-| Rolling stats | mean и std за 3, 6, 12, 24 ч по скоростям ветра |
-| Лаги таргета | Прошлая выработка: lag1, lag2, lag3, lag6, lag12, lag24 ч |
+Если AutoGluon val MAE отличается от дефолтного 7.036:
 
-> При инференсе лаги таргета заполняются **авторегрессионно**: первые значения берутся из хвоста обучающей выборки, затем используются собственные предсказания модели.
+```powershell
+.\.venv\Scripts\python blend_v9_ag.py --ag_val_mae 6.83
+```
 
-## Модели
+---
 
-### LightGBM-ансамбль
+## Формат файла предсказаний
 
-7 членов `LGBMRegressor`, финальное предсказание — простое среднее.
+Файл `predictions.csv` для загрузки на платформу:
 
-- Objective: `regression_l1` (MAE-loss)
-- Гиперпараметры подобраны Optuna
-- Early stopping по валидации (patience = 150)
-- Финальное дообучение на полном датасете × 1.15
+- Формат: CSV
+- Один столбец: почасовые значения выработки, МВт
+- Без заголовка
+- Разделитель дробной части: точка
+- Количество строк = количеству часов в тестовом периоде
 
-### AutoGluon TabularPredictor
-
-Обучает 106 конфигураций разных алгоритмов и строит взвешенный ансамбль:
-
-- LightGBM, XGBoost, CatBoost, RandomForest, ExtraTrees
-- NeuralNetFastAI, NeuralNetTorch
-
-`num_bag_folds=0`, `num_stack_levels=0` — отключены случайные k-fold фолды, используется хронологический train/val сплит (без утечки данных).
-
-### LSTM
-
-2-слойный LSTM с окном 48 часов:
-
-- Вход: последние 48 часов всех признаков (z-score нормализация)
-- Выход: выработка следующего часа
-- MAE-loss, Adam, ReduceLROnPlateau, early stopping
-
-## Метрики
-
-| Метрика | Формула | Зачем |
-|---|---|---|
-| **MAE** | `mean(|y - y_pred|)`, МВт | основная метрика |
-| **RMSE** | `sqrt(mean((y - y_pred)^2))`, МВт | штрафует большие ошибки |
-| **R²** | `1 - SS_res / SS_tot` | объяснённая дисперсия |
-| **nMAE %** | `MAE / 90.09 * 100` | отраслевой стандарт для ВИЭ |
-
-## Результаты на валидации
-
-Валидация = последние 10 % обучающих данных (~3 244 часа).
-
-| Конфигурация | MAE | nMAE |
-|---|---|---|
-| Базовое (HistGBM, 54 признака) | 7,63 | 8,47 % |
-| LightGBM-ансамбль x 7 | 7,046 | 7,82 % |
-| AutoGluon WeightedEnsemble | 6,832 | 7,58 % |
-| LightGBM + лаги таргета | *в процессе* | — |
-| LSTM | *в процессе* | — |
-
-## Воспроизводимость
-
-`SEED = 42` фиксируется через `src/utils.set_global_seed`. При одинаковых входных CSV пайплайны дают идентичный результат.
+Пример (первые 3 строки):
+```
+25.109018351503575
+21.029121628484724
+17.061244202603625
+```

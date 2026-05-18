@@ -51,8 +51,8 @@ def main(time_limit: int = 3600, preset: str = "high_quality") -> None:
     df = load_train(TRAIN_CSV)
     print(f"  rows={len(df)},  range=[{df[DATETIME_COL].min()}, {df[DATETIME_COL].max()}]")
 
-    print("Building features...")
-    df = build_features(df)
+    print("Building features (NO target lags)...")
+    df = build_features(df, use_target_lags=False)
     feats = feature_columns(df)
     print(f"  {len(feats)} features.")
 

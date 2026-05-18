@@ -4,7 +4,10 @@ pandas>=1.5,<4.0
 scikit-learn>=1.4,<2.0
 joblib>=1.2
 lightgbm>=4.0
+xgboost>=2.0
+catboost>=1.2
 optuna>=3.0
+scipy>=1.10
 
 # --- EDA / notebook (optional) ---
 matplotlib>=3.6

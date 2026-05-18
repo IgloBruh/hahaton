@@ -1,7 +1,14 @@
 # --- Hackathon rules forbid uploading raw data to the public repo ---
+data/
 dataset/
 *.csv
 .claude/
+
+# --- CatBoost training artefacts ---
+catboost_info/
+
+# --- Training logs ---
+*.txt
 
 # --- Python ---
 __pycache__/

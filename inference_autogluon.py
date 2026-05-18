@@ -51,8 +51,8 @@ def main() -> None:
     combined = pd.concat([train_tail, raw_valid], ignore_index=True)
     combined = combined.sort_values(DATETIME_COL).reset_index(drop=True)
 
-    print("-> Building features (with full history context) ...")
-    feat_df = build_features(combined)
+    print("-> Building features (with full history context, NO target lags) ...")
+    feat_df = build_features(combined, use_target_lags=False)
 
     valid_mask = feat_df[DATETIME_COL].isin(raw_valid[DATETIME_COL])
     feat_valid = feat_df.loc[valid_mask].copy()

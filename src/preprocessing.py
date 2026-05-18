@@ -276,6 +276,90 @@ def _add_temporal_features(df: pd.DataFrame) -> pd.DataFrame:
 TARGET_LAG_OFFSETS = [1, 2, 3, 6, 12, 24]
 
 
+# ----- Ramp features (wind acceleration / deceleration) ------------------
+def _add_ramp_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Ramp = future wind speed minus past wind speed — captures ramping events.
+
+    Called after _add_temporal_features so lag/lead columns already exist.
+    Skips columns that are absent (e.g., on very short DataFrames).
+    """
+    new_cols: dict[str, pd.Series] = {}
+    for n_past, n_future in [(1, 1), (1, 3), (3, 3)]:
+        lag_col  = f"wind_speed_hub_lag{n_past}"
+        lead_col = f"wind_speed_hub_lead{n_future}"
+        if lag_col in df.columns and lead_col in df.columns:
+            key = f"wind_ramp_{n_past}h_to_{n_future}h"
+            new_cols[key] = df[lead_col] - df[lag_col]
+            new_cols[f"{key}_cubed"] = new_cols[key] ** 3
+
+    # Speed-normalised ramp rate — tells the *relative* acceleration
+    if "wind_speed_hub" in df.columns and "wind_ramp_1h_to_1h" in new_cols:
+        denom = df["wind_speed_hub"].clip(lower=1.0)
+        new_cols["wind_ramp_rel"] = new_cols["wind_ramp_1h_to_1h"] / denom
+
+    if new_cols:
+        df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+    return df
+
+
+# ----- Empirical power curve (fitted from training data) -----------------
+def fit_empirical_curve(
+    df: pd.DataFrame,
+    target_col: str,
+    bin_width: float = 0.5,
+    min_samples: int = 8,
+) -> dict:
+    """Fit a smooth empirical power curve from training data.
+
+    Maps hub-height wind speed → median production per turbine (MW).
+    Returns a serialisable dict so it can be stored in model artefacts.
+    """
+    available = df["available_turbines"].clip(lower=1)
+    ppt = df[target_col] / available          # production per turbine
+    v = df["wind_speed_hub"].values
+
+    bins = np.arange(0.0, 31.0, bin_width)
+    centers = bins[:-1] + bin_width / 2.0
+    medians = np.full(len(centers), np.nan)
+
+    for i in range(len(centers)):
+        mask = (v >= bins[i]) & (v < bins[i + 1])
+        if mask.sum() >= min_samples:
+            medians[i] = float(np.median(ppt.values[mask]))
+
+    # Interpolate NaN bins linearly
+    valid = ~np.isnan(medians)
+    if valid.sum() >= 2:
+        medians = np.interp(centers, centers[valid], medians[valid])
+    else:
+        medians = np.zeros(len(centers))
+
+    # Enforce physical constraints: 0 below cut-in (3 m/s), 0 above cut-out (25 m/s)
+    medians[centers < 3.0]  = np.minimum(medians[centers < 3.0], 0.0)
+    medians[centers > 25.0] = 0.0
+
+    return {"bin_centers": centers.tolist(), "medians": medians.tolist(), "bin_width": bin_width}
+
+
+def apply_empirical_curve(df: pd.DataFrame, pc_map: dict) -> pd.DataFrame:
+    """Add empirical power curve features to a DataFrame.
+
+    pc_map must have been returned by fit_empirical_curve.
+    """
+    centers = np.array(pc_map["bin_centers"])
+    medians = np.array(pc_map["medians"])
+    v = df["wind_speed_hub"].values
+
+    ppt = np.interp(v, centers, medians, left=0.0, right=0.0)
+    df = df.copy()
+    df["empirical_pc_per_turbine"] = ppt
+    df["empirical_pc"] = ppt * df["available_turbines"]
+    # Residual vs. manufacturer SG curve — captures calibration offset
+    if "pc_hub" in df.columns:
+        df["empirical_vs_sg"] = df["empirical_pc"] - df["pc_hub"]
+    return df
+
+
 def _add_target_lags(df: pd.DataFrame) -> pd.DataFrame:
     """Lag features of the target variable (past production).
 
@@ -293,7 +377,7 @@ def _add_target_lags(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ----- Public API -------------------------------------------------------
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
+def build_features(df: pd.DataFrame, use_target_lags: bool = True) -> pd.DataFrame:
     """Build the full feature set on a chronologically-sorted DataFrame."""
     df = fill_missing_high_altitude(df)
     df = _add_calendar(df)
@@ -304,7 +388,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = _add_extra_features(df)
     df = _add_power_curve_features(df)
     df = _add_temporal_features(df)
-    df = _add_target_lags(df)
+    df = _add_ramp_features(df)
+    if use_target_lags:
+        df = _add_target_lags(df)
 
     # Fill NaNs created by shift/rolling at the boundaries
     df = df.ffill().bfill()
