@@ -85,8 +85,8 @@ add_para(doc,
 # ── 2. Подход ────────────────────────────────────────────────────────────────
 add_heading(doc, "2. Выбранный подход")
 add_para(doc,
-    "Решение построено на гомогенном LightGBM-ансамбле с гиперпараметрами, "
-    "подобранными алгоритмом Optuna. Ключевые принципы:"
+    "Решение построено на гетерогенном ансамбле градиентного бустинга с "
+    "гиперпараметрами, подобранными алгоритмом Optuna. Ключевые принципы:"
 )
 for item in [
     "Физически мотивированный инжиниринг признаков: эмпирическая кривая мощности, "
@@ -95,8 +95,8 @@ for item in [
     "и улучшает обобщение на новые данные.",
     "Оптимизация гиперпараметров через Optuna (200 проб, TPE). Результат сохранён "
     "в optuna_v8.json и используется повторно без перебора.",
-    "Ансамбль из 15 членов LightGBM GBDT (5 конфигураций × 3 seed) — "
-    "diversity по начальным условиям снижает дисперсию прогноза.",
+    "Гетерогенный ансамбль из 26 членов (LGBM GBDT×15, DART×3, XGBoost×3, CatBoost×5) — "
+    "разные архитектуры снижают корреляцию ошибок.",
     "Взвешенное объединение через scipy.optimize.minimize (SLSQP) — "
     "оптимальные веса на val-сплите вместо простого среднего.",
     "Финальное дообучение на полном датасете с best_iter × 1,15 итерациями.",
@@ -107,20 +107,26 @@ for item in [
 add_heading(doc, "3. Архитектура модели v8")
 
 add_heading(doc, "3.1 Состав ансамбля", level=2)
-add_para(doc, "Итоговая модель — ансамбль из 15 членов LightGBM GBDT:")
+add_para(doc, "Итоговая модель (v8) — гетерогенный ансамбль из 26 членов:")
 
-tbl = doc.add_table(rows=2, cols=3)
+tbl = doc.add_table(rows=5, cols=3)
 tbl.style = "Table Grid"
 for cell, txt in zip(tbl.rows[0].cells, ["Тип", "Кол-во", "Конфигурации"]):
     cell.text = txt
     cell.paragraphs[0].runs[0].font.bold = True
     cell.paragraphs[0].runs[0].font.size = Pt(11)
     cell.paragraphs[0].runs[0].font.name = "Times New Roman"
-for cell, val in zip(tbl.rows[1].cells,
-                     ["LightGBM GBDT", "15", "5 лучших Optuna-конфигураций × 3 seed"]):
-    cell.text = val
-    cell.paragraphs[0].runs[0].font.size = Pt(11)
-    cell.paragraphs[0].runs[0].font.name = "Times New Roman"
+for i, (t, n, d) in enumerate([
+    ("LightGBM GBDT", "15", "5 Optuna-конфигураций × 3 seed"),
+    ("LightGBM DART", "3",  "num_leaves ∈ {80, 100, 150}"),
+    ("XGBoost",       "3",  "depth ∈ {6, 7, 8}"),
+    ("CatBoost",      "5",  "depth ∈ {7–11}, консервативный LR"),
+], 1):
+    row = tbl.rows[i].cells
+    for cell, val in zip(row, [t, n, d]):
+        cell.text = val
+        cell.paragraphs[0].runs[0].font.size = Pt(11)
+        cell.paragraphs[0].runs[0].font.name = "Times New Roman"
 doc.add_paragraph()
 
 add_heading(doc, "3.2 Инжиниринг признаков", level=2)
